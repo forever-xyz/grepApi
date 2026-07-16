@@ -72,5 +72,15 @@ intellijPlatform {
         ideaVersion {
             sinceBuild = "241"
         }
+
+        changeNotes = """
+            <ul>
+                <li>Initial public release.</li>
+                <li>Fast Spring MVC endpoint search with fuzzy matching and HTTP method filters.</li>
+                <li>Open search with <code>Ctrl + Alt + /</code> on Windows/Linux or <code>Command + Option + /</code> on macOS.</li>
+                <li>Jump directly from a search result to the matching Controller method.</li>
+                <li>Supports IntelliJ IDEA 2024.1 and later.</li>
+            </ul>
+        """.trimIndent()
     }
 }
