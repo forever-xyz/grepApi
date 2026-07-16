@@ -1,12 +1,25 @@
 <idea-plugin>
     <id>io.github.found404.grepapi</id>
     <name>Grep API</name>
-    <vendor email="ikunzp520@gmail.com">found404</vendor>
+    <vendor email="ikunzp520@gmail.com" url="https://github.com/forever-xyz/grepApi">forever-xyz</vendor>
 
     <description><![CDATA[
-        Grep API provides fast Spring MVC endpoint search and source navigation for IntelliJ IDEA.<br>
-        根据 URL 或关键字快速搜索 Spring MVC 接口，并定位到对应的 Mapping 源码位置。
-        支持完整 URL、HTTP 方法、模糊搜索、路径变量、通配符和可配置网关前缀。
+        <p>Grep API provides fast Spring MVC endpoint search and source navigation for IntelliJ IDEA.</p>
+        <h3>Quick Start</h3>
+        <ul>
+            <li><b>Windows/Linux:</b> Press <code>Ctrl + Alt + /</code> to open API search.</li>
+            <li><b>macOS:</b> Press <code>Command + Option + /</code> (<code>⌘⌥/</code>) to open API search.</li>
+            <li><b>Menu:</b> Open <code>Navigate &gt; 搜索 API 接口...</code>.</li>
+            <li>Enter a URL or keyword, optionally filter by HTTP method, then press <code>Enter</code> to jump to the Controller method.</li>
+        </ul>
+        <h3>快速开始</h3>
+        <ul>
+            <li><b>Windows/Linux 快捷键：</b><code>Ctrl + Alt + /</code></li>
+            <li><b>macOS 快捷键：</b><code>Command + Option + /</code>（<code>⌘⌥/</code>）</li>
+            <li><b>菜单入口：</b><code>导航（Navigate）&gt; 搜索 API 接口...</code></li>
+            <li>输入 URL 或关键字，可按 HTTP 请求方式筛选；选择结果后按 <code>Enter</code> 定位到 Controller 方法。</li>
+        </ul>
+        <p>支持完整 URL、模糊搜索、路径变量、通配符和可配置网关前缀。</p>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -29,6 +42,8 @@
                 icon="/icons/grepApi.svg">
             <add-to-group group-id="GoToMenu" anchor="last"/>
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt SLASH"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt SLASH" replace-all="true"/>
+            <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta alt SLASH" replace-all="true"/>
         </action>
     </actions>
 </idea-plugin>

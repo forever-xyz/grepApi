@@ -41,7 +41,7 @@ Grep API 是一款轻量的 IntelliJ IDEA 插件，用于在 Java Spring 项目�
 
 ### 主要功能
 
-- 使用 `Ctrl + Alt + /` 快速打开 API 搜索窗口。
+- Windows/Linux 使用 `Ctrl + Alt + /`，macOS 使用 `Command + Option + /`（`⌘⌥/`）快速打开 API 搜索窗口。
 - 支持完整 URL、URL 路径、curl 命令和 `HTTP_METHOD + URL`。
 - 支持路径、Controller、Java 方法名和模块名模糊搜索。
 - 输入以 `/` 开头的路径时采用严格连续匹配，避免无关结果干扰。
@@ -89,10 +89,11 @@ Settings → Plugins → Marketplace → 搜索 Grep API
 
 ### 使用
 
-打开 Java Spring 项目，等待 IDEA 索引完成，然后按：
+打开 Java Spring 项目，等待 IDEA 索引完成，然后按对应系统快捷键：
 
 ```text
-Ctrl + Alt + /
+Windows/Linux: Ctrl + Alt + /
+macOS:         Command + Option + /  (⌘⌥/)
 ```
 
 也可以通过 `Navigate → 搜索 API 接口...` 打开。
@@ -190,7 +191,7 @@ Fuzzy search with HTTP method filtering:
 
 ### Features
 
-- Open the endpoint search popup with `Ctrl + Alt + /`.
+- Open the endpoint search popup with `Ctrl + Alt + /` on Windows/Linux or `Command + Option + /` (`⌘⌥/`) on macOS.
 - Search by full URL, URL path, curl command, or `HTTP_METHOD + URL`.
 - Fuzzy search across paths, Controllers, Java methods, and module names.
 - Strict contiguous matching for input beginning with `/`, preventing unrelated path results.
@@ -238,10 +239,11 @@ Settings → Plugins → Marketplace → search for Grep API
 
 ### Usage
 
-Open a Java Spring project, wait for IDE indexing to finish, and press:
+Open a Java Spring project, wait for IDE indexing to finish, and press the shortcut for your operating system:
 
 ```text
-Ctrl + Alt + /
+Windows/Linux: Ctrl + Alt + /
+macOS:         Command + Option + /  (⌘⌥/)
 ```
 
 You can also use `Navigate → 搜索 API 接口...`.
