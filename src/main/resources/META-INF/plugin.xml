@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>io.github.found404.grepapi</id>
+    <name>Grep API</name>
+    <vendor email="ikunzp520@gmail.com">found404</vendor>
+
+    <description><![CDATA[
+        Grep API provides fast Spring MVC endpoint search and source navigation for IntelliJ IDEA.<br>
+        根据 URL 或关键字快速搜索 Spring MVC 接口，并定位到对应的 Mapping 源码位置。
+        支持完整 URL、HTTP 方法、模糊搜索、路径变量、通配符和可配置网关前缀。
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.github.grepapi.startup.GrepApiStartupActivity"/>
+        <projectConfigurable
+                parentId="tools"
+                instance="com.github.grepapi.settings.GrepApiConfigurable"
+                id="com.github.grepapi.settings"
+                displayName="Grep API"/>
+    </extensions>
+
+    <actions>
+        <action id="com.github.grepapi.SearchApiAction"
+                class="com.github.grepapi.ui.SearchApiAction"
+                text="搜索 API 接口..."
+                description="根据 URL 或关键字搜索 Spring API 并定位源码"
+                icon="/icons/grepApi.svg">
+            <add-to-group group-id="GoToMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt SLASH"/>
+        </action>
+    </actions>
+</idea-plugin>

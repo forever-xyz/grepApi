@@ -1,0 +1,33 @@
+name: Branch Flow Guard
+
+on:
+  pull_request:
+    branches:
+      - master
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  validate-source-branch:
+    name: Validate source branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce repository branch flow
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          if [[ "$BASE_BRANCH" == "master" && "$HEAD_BRANCH" != "develop" ]]; then
+            echo "Pull requests targeting master must come from develop."
+            exit 1
+          fi
+
+          if [[ "$BASE_BRANCH" == "develop" && ("$HEAD_BRANCH" == "master" || "$HEAD_BRANCH" == "develop") ]]; then
+            echo "Pull requests targeting develop must come from a feature, fix, or other working branch."
+            exit 1
+          fi
+
+          echo "Branch flow is valid: $HEAD_BRANCH -> $BASE_BRANCH"
