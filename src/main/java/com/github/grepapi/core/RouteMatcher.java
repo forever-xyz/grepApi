@@ -4,7 +4,9 @@ import com.github.grepapi.model.ApiMatchResult;
 import com.github.grepapi.model.ApiRoute;
 import com.github.grepapi.model.ApiRouteMatch;
 import com.github.grepapi.model.ApiSearchRequest;
+import com.intellij.openapi.progress.ProgressManager;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -12,13 +14,21 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.PriorityQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 public final class RouteMatcher {
+    private static final int CANCELLATION_CHECK_INTERVAL = 64;
+    private static final int MAX_CACHED_ROUTES = 8_000;
     private static final Comparator<ApiRouteMatch> WORST_FIRST = Comparator
             .comparingInt(ApiRouteMatch::score)
             .thenComparing(match -> match.route().path(), Comparator.reverseOrder());
+    private final ConcurrentHashMap<ApiRoute, RouteData> routeDataCache = new ConcurrentHashMap<>();
+
+    public void clearCache() {
+        routeDataCache.clear();
+    }
 
     public @NotNull List<ApiRouteMatch> match(
             @NotNull ApiSearchRequest request,
@@ -32,6 +42,7 @@ public final class RouteMatcher {
             @NotNull List<ApiRoute> routes,
             int limit
     ) {
+        SearchRequestData requestData = SearchRequestData.from(request);
         int safeLimit = Math.max(1, limit);
         PriorityQueue<ApiRouteMatch> topMatches = new PriorityQueue<>(
                 Math.min(safeLimit, 128),
@@ -39,12 +50,16 @@ public final class RouteMatcher {
         );
         int totalMatches = 0;
 
-        for (ApiRoute route : routes) {
+        for (int routeIndex = 0; routeIndex < routes.size(); routeIndex++) {
+            if (routeIndex % CANCELLATION_CHECK_INTERVAL == 0) {
+                ProgressManager.checkCanceled();
+            }
+            ApiRoute route = routes.get(routeIndex);
             if (!matchesHttpMethod(request.httpMethod(), route)) {
                 continue;
             }
 
-            ApiRouteMatch match = findBestMatch(request, route);
+            ApiRouteMatch match = findBestMatch(request, requestData, route, routeDataFor(route));
             if (match == null) {
                 continue;
             }
@@ -63,33 +78,52 @@ public final class RouteMatcher {
         return new ApiMatchResult(List.copyOf(results), totalMatches);
     }
 
-    private ApiRouteMatch findBestMatch(@NotNull ApiSearchRequest request, @NotNull ApiRoute route) {
-        ApiRouteMatch exact = findPathMatch(request, route);
+    private @NotNull RouteData routeDataFor(@NotNull ApiRoute route) {
+        RouteData cached = routeDataCache.get(route);
+        if (cached != null) {
+            return cached;
+        }
+
+        RouteData created = RouteData.from(route);
+        if (routeDataCache.size() >= MAX_CACHED_ROUTES) {
+            return created;
+        }
+        RouteData existing = routeDataCache.putIfAbsent(route, created);
+        return existing == null ? created : existing;
+    }
+
+    private ApiRouteMatch findBestMatch(
+            @NotNull ApiSearchRequest request,
+            @NotNull SearchRequestData requestData,
+            @NotNull ApiRoute route,
+            @NotNull RouteData routeData
+    ) {
+        ApiRouteMatch exact = findPathMatch(request, requestData, route, routeData);
         if (exact != null) {
             return exact;
         }
         if (request.path() != null) {
-            return findPathContainsMatch(request, route);
+            return findPathContainsMatch(request, requestData, route, routeData);
         }
-        return findFuzzyMatch(request, route);
+        return findFuzzyMatch(request, requestData, route, routeData);
     }
 
     private ApiRouteMatch findPathContainsMatch(
             @NotNull ApiSearchRequest request,
-            @NotNull ApiRoute route
+            @NotNull SearchRequestData requestData,
+            @NotNull ApiRoute route,
+            @NotNull RouteData routeData
     ) {
-        String routePath = UrlInputParser.normalizePath(route.path()).toLowerCase(Locale.ROOT);
         ApiRouteMatch best = null;
-        for (int candidateIndex = 0; candidateIndex < request.candidatePaths().size(); candidateIndex++) {
-            String candidate = UrlInputParser.normalizePath(request.candidatePaths().get(candidateIndex));
-            String normalizedCandidate = candidate.toLowerCase(Locale.ROOT);
-            int matchIndex = routePath.indexOf(normalizedCandidate);
+        for (int candidateIndex = 0; candidateIndex < requestData.pathCandidates().size(); candidateIndex++) {
+            PathCandidate candidate = requestData.pathCandidates().get(candidateIndex);
+            int matchIndex = routeData.lowerCasePath().indexOf(candidate.lowerCasePath());
             if (matchIndex < 0) {
                 continue;
             }
 
             int score = (matchIndex == 0 ? 760 : 700)
-                    + Math.min(100, normalizedCandidate.length() * 3)
+                    + Math.min(100, candidate.normalizedPath().length() * 3)
                     - (candidateIndex * 35);
             if (request.httpMethod() != null && route.httpMethods().contains(request.httpMethod())) {
                 score += 80;
@@ -97,7 +131,7 @@ public final class RouteMatcher {
             ApiRouteMatch current = new ApiRouteMatch(
                     route,
                     score,
-                    candidate,
+                    candidate.normalizedPath(),
                     candidateIndex,
                     matchIndex == 0 ? "路径前缀匹配" : "路径包含匹配"
             );
@@ -108,11 +142,16 @@ public final class RouteMatcher {
         return best;
     }
 
-    private ApiRouteMatch findPathMatch(@NotNull ApiSearchRequest request, @NotNull ApiRoute route) {
+    private ApiRouteMatch findPathMatch(
+            @NotNull ApiSearchRequest request,
+            @NotNull SearchRequestData requestData,
+            @NotNull ApiRoute route,
+            @NotNull RouteData routeData
+    ) {
         ApiRouteMatch best = null;
-        for (int candidateIndex = 0; candidateIndex < request.candidatePaths().size(); candidateIndex++) {
-            String candidate = request.candidatePaths().get(candidateIndex);
-            MatchDetails details = matchesPath(route.path(), candidate);
+        for (int candidateIndex = 0; candidateIndex < requestData.pathCandidates().size(); candidateIndex++) {
+            PathCandidate candidate = requestData.pathCandidates().get(candidateIndex);
+            MatchDetails details = routeData.pathTemplate().matches(candidate.normalizedPath());
             if (!details.matches()) {
                 continue;
             }
@@ -135,14 +174,19 @@ public final class RouteMatcher {
         return best;
     }
 
-    private ApiRouteMatch findFuzzyMatch(@NotNull ApiSearchRequest request, @NotNull ApiRoute route) {
-        String query = compact(request.searchText());
+    private ApiRouteMatch findFuzzyMatch(
+            @NotNull ApiSearchRequest request,
+            @NotNull SearchRequestData requestData,
+            @NotNull ApiRoute route,
+            @NotNull RouteData routeData
+    ) {
+        String query = requestData.compactSearchText();
         if (query.isEmpty()) {
             int score = request.httpMethod() == null ? 100 : 180;
             return new ApiRouteMatch(route, score, request.searchText(), 0, "全部接口");
         }
 
-        FieldScore best = bestFuzzyField(query, route);
+        FieldScore best = bestFuzzyField(query, routeData);
         if (best.score() < 0) {
             return null;
         }
@@ -154,15 +198,13 @@ public final class RouteMatcher {
         return new ApiRouteMatch(route, score, request.searchText(), 0, best.reason());
     }
 
-    private @NotNull FieldScore bestFuzzyField(@NotNull String query, @NotNull ApiRoute route) {
-        FieldScore best = scoreField(query, route.path(), 650, "路径模糊匹配");
-        best = max(best, scoreField(query, route.methodName(), 590, "方法名模糊匹配"));
-        best = max(best, scoreField(query, route.simpleClassName(), 540, "Controller 模糊匹配"));
-        best = max(best, scoreField(query, route.moduleName(), 470, "模块名模糊匹配"));
+    private @NotNull FieldScore bestFuzzyField(@NotNull String query, @NotNull RouteData routeData) {
+        FieldScore best = scoreField(query, routeData.compactPath(), 650, "路径模糊匹配");
+        best = max(best, scoreField(query, routeData.compactMethodName(), 590, "方法名模糊匹配"));
+        best = max(best, scoreField(query, routeData.compactClassName(), 540, "Controller 模糊匹配"));
+        best = max(best, scoreField(query, routeData.compactModuleName(), 470, "模块名模糊匹配"));
 
-        String combined = route.path() + " " + route.simpleClassName() + " "
-                + route.methodName() + " " + route.moduleName();
-        int subsequence = subsequenceScore(query, compact(combined));
+        int subsequence = subsequenceScore(query, routeData.compactCombined());
         if (subsequence >= 0) {
             best = max(best, new FieldScore(330 + subsequence, "综合模糊匹配"));
         }
@@ -171,11 +213,10 @@ public final class RouteMatcher {
 
     private @NotNull FieldScore scoreField(
             @NotNull String compactQuery,
-            @NotNull String value,
+            @NotNull String compactValue,
             int directBase,
             @NotNull String reason
     ) {
-        String compactValue = compact(value);
         int directIndex = compactValue.indexOf(compactQuery);
         if (directIndex >= 0) {
             int boundaryBonus = directIndex == 0 ? 45 : 0;
@@ -213,7 +254,7 @@ public final class RouteMatcher {
         return score - Math.min(80, Math.max(0, target.length() - query.length()) / 3);
     }
 
-    private @NotNull String compact(@NotNull String value) {
+    private static @NotNull String compact(@NotNull String value) {
         String lower = value.toLowerCase(Locale.ROOT);
         StringBuilder result = new StringBuilder(lower.length());
         for (int index = 0; index < lower.length(); index++) {
@@ -233,54 +274,113 @@ public final class RouteMatcher {
         return inputMethod == null || route.httpMethods().isEmpty() || route.httpMethods().contains(inputMethod);
     }
 
-    private @NotNull MatchDetails matchesPath(@NotNull String routePath, @NotNull String inputPath) {
-        String normalizedRoute = UrlInputParser.normalizePath(routePath);
-        String normalizedInput = UrlInputParser.normalizePath(inputPath);
-        if (normalizedRoute.equals(normalizedInput)) {
-            return new MatchDetails(true, 1_000, 0, 0);
+    private record SearchRequestData(
+            @NotNull String compactSearchText,
+            @NotNull List<PathCandidate> pathCandidates
+    ) {
+        private static @NotNull SearchRequestData from(@NotNull ApiSearchRequest request) {
+            List<PathCandidate> candidates = new ArrayList<>(request.candidatePaths().size());
+            for (String path : request.candidatePaths()) {
+                String normalizedPath = UrlInputParser.normalizePath(path);
+                candidates.add(new PathCandidate(normalizedPath, normalizedPath.toLowerCase(Locale.ROOT)));
+            }
+            return new SearchRequestData(compact(request.searchText()), List.copyOf(candidates));
         }
+    }
 
-        String[] segments = normalizedRoute.equals("/")
-                ? new String[0]
-                : normalizedRoute.substring(1).split("/");
-        StringBuilder regex = new StringBuilder("^");
-        int variables = 0;
-        int wildcards = 0;
-        int staticSegments = 0;
+    private record PathCandidate(@NotNull String normalizedPath, @NotNull String lowerCasePath) {
+    }
 
-        if (segments.length == 0) {
-            regex.append('/');
+    private record RouteData(
+            @NotNull String lowerCasePath,
+            @NotNull String compactPath,
+            @NotNull String compactMethodName,
+            @NotNull String compactClassName,
+            @NotNull String compactModuleName,
+            @NotNull String compactCombined,
+            @NotNull PathTemplate pathTemplate
+    ) {
+        private static @NotNull RouteData from(@NotNull ApiRoute route) {
+            String normalizedPath = UrlInputParser.normalizePath(route.path());
+            String simpleClassName = route.simpleClassName();
+            String moduleName = route.moduleName();
+            return new RouteData(
+                    normalizedPath.toLowerCase(Locale.ROOT),
+                    compact(normalizedPath),
+                    compact(route.methodName()),
+                    compact(simpleClassName),
+                    compact(moduleName),
+                    compact(normalizedPath + " " + simpleClassName + " " + route.methodName() + " " + moduleName),
+                    PathTemplate.from(normalizedPath)
+            );
         }
+    }
 
-        for (String segment : segments) {
-            if ("**".equals(segment)) {
-                regex.append("(?:/.*)?");
-                wildcards += 2;
-            } else if ("*".equals(segment)) {
-                regex.append("/[^/]+");
-                wildcards++;
-            } else if (segment.startsWith("{") && segment.endsWith("}")) {
-                int colon = segment.indexOf(':');
-                if (colon > 1) {
-                    String expression = segment.substring(colon + 1, segment.length() - 1);
-                    regex.append("/(?:").append(expression).append(')');
-                } else {
+    private record PathTemplate(
+            @NotNull String normalizedPath,
+            int variables,
+            int wildcards,
+            int staticSegments,
+            @Nullable Pattern pattern
+    ) {
+        private static @NotNull PathTemplate from(@NotNull String normalizedPath) {
+            String[] segments = normalizedPath.equals("/")
+                    ? new String[0]
+                    : normalizedPath.substring(1).split("/");
+            StringBuilder regex = new StringBuilder("^");
+            int variables = 0;
+            int wildcards = 0;
+            int staticSegments = 0;
+
+            if (segments.length == 0) {
+                regex.append('/');
+            }
+
+            for (String segment : segments) {
+                if ("**".equals(segment)) {
+                    regex.append("(?:/.*)?");
+                    wildcards += 2;
+                } else if ("*".equals(segment)) {
                     regex.append("/[^/]+");
+                    wildcards++;
+                } else if (segment.startsWith("{") && segment.endsWith("}")) {
+                    int colon = segment.indexOf(':');
+                    if (colon > 1) {
+                        String expression = segment.substring(colon + 1, segment.length() - 1);
+                        regex.append("/(?:").append(expression).append(')');
+                    } else {
+                        regex.append("/[^/]+");
+                    }
+                    variables++;
+                } else {
+                    regex.append('/').append(Pattern.quote(segment));
+                    staticSegments++;
                 }
-                variables++;
-            } else {
-                regex.append('/').append(Pattern.quote(segment));
-                staticSegments++;
+            }
+            regex.append("/?$");
+
+            try {
+                return new PathTemplate(
+                        normalizedPath,
+                        variables,
+                        wildcards,
+                        staticSegments,
+                        Pattern.compile(regex.toString())
+                );
+            } catch (PatternSyntaxException ignored) {
+                return new PathTemplate(normalizedPath, variables, wildcards, staticSegments, null);
             }
         }
-        regex.append("/?$");
 
-        try {
-            boolean matched = Pattern.compile(regex.toString()).matcher(normalizedInput).matches();
+        private @NotNull MatchDetails matches(@NotNull String normalizedInput) {
+            if (normalizedPath.equals(normalizedInput)) {
+                return new MatchDetails(true, 1_000, 0, 0);
+            }
+            if (pattern == null || !pattern.matcher(normalizedInput).matches()) {
+                return new MatchDetails(false, 0, variables, wildcards);
+            }
             int score = 800 + (staticSegments * 20) - (variables * 8) - (wildcards * 45);
-            return new MatchDetails(matched, score, variables, wildcards);
-        } catch (PatternSyntaxException ignored) {
-            return new MatchDetails(false, 0, variables, wildcards);
+            return new MatchDetails(true, score, variables, wildcards);
         }
     }
 

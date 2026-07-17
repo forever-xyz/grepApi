@@ -13,7 +13,7 @@ public final class GrepApiStartupActivity implements StartupActivity.Background 
     public void runActivity(@NotNull Project project) {
         DumbService.getInstance(project).runWhenSmart(() -> ReadAction
                 .nonBlocking(ApiRouteService.getInstance(project)::getRoutes)
-                .coalesceBy(project, ApiRouteService.class)
+                .coalesceBy(project, GrepApiStartupActivity.class)
                 .expireWith(project)
                 .submit(AppExecutorUtil.getAppExecutorService()));
     }
