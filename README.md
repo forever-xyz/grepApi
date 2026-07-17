@@ -133,9 +133,9 @@ Settings → Tools → Grep API
 
 要求：
 
-- JDK 17 或更高版本。
+- JDK 21，用于读取 IDEA 2026.x SDK；生成的插件仍使用 Java 17 字节码。
 - 网络连接，用于首次下载 Gradle 和构建依赖。
-- 可选：本机安装 IntelliJ IDEA 2024.1，避免下载目标 IDE SDK。
+- 必需：本机安装 IntelliJ IDEA 2024.1 至 2026.x。构建不会下载目标 IDE SDK。
 
 使用项目自带的 Gradle Wrapper 构建，无需全局安装 Gradle：
 
@@ -144,11 +144,16 @@ cd C:\path\to\GrepApi
 .\gradlew.bat clean test buildPlugin verifyPluginStructure
 ```
 
-使用本地 IDEA SDK：
+在 `C:/Users/Administrator/.gradle/gradle.properties` 中设置本机 IDEA 安装根目录（不要写入仓库）：
+
+```properties
+localIdePath=D:/software/IntelliJ IDEA 2026.1.1
+```
+
+设置后直接构建：
 
 ```powershell
-.\gradlew.bat clean test buildPlugin verifyPluginStructure `
-  "-PlocalIdePath=D:/software/IntelliJ IDEA 2024.1"
+.\gradlew.bat clean test buildPlugin verifyPluginStructure
 ```
 
 生成的插件位于：
@@ -283,9 +288,9 @@ The same settings page lets you choose the match-highlight palette and preview i
 
 Requirements:
 
-- JDK 17 or later.
+- JDK 21 to read the IDEA 2026.x SDK; the generated plugin still targets Java 17 bytecode.
 - A network connection for the initial Gradle and dependency download.
-- Optional: a local IntelliJ IDEA 2024.1 installation to avoid downloading the target IDE SDK.
+- Required: a locally installed IntelliJ IDEA 2024.1 through 2026.x. The build never downloads a target IDE SDK.
 
 Use the included Gradle Wrapper; a global Gradle installation is not required:
 
@@ -294,11 +299,16 @@ cd C:\path\to\GrepApi
 .\gradlew.bat clean test buildPlugin verifyPluginStructure
 ```
 
-Use a locally installed IDEA SDK:
+Set the local IDEA installation root in `C:/Users/Administrator/.gradle/gradle.properties` (do not commit this user-specific path):
+
+```properties
+localIdePath=D:/software/IntelliJ IDEA 2026.1.1
+```
+
+Then build directly:
 
 ```powershell
-.\gradlew.bat clean test buildPlugin verifyPluginStructure `
-  "-PlocalIdePath=D:/software/IntelliJ IDEA 2024.1"
+.\gradlew.bat clean test buildPlugin verifyPluginStructure
 ```
 
 The installable archive is generated at:
