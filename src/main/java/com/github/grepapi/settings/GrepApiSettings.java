@@ -16,8 +16,11 @@ import java.util.List;
 @Service(Service.Level.PROJECT)
 @State(name = "GrepApiSettings", storages = @Storage(StoragePathMacros.WORKSPACE_FILE))
 public final class GrepApiSettings implements PersistentStateComponent<GrepApiSettings> {
+    private static final int MAX_SAVED_SEARCH_LENGTH = 2_048;
+
     public List<String> ignoredPrefixes = new ArrayList<>();
     public String matchHighlightPalette = "BLUE";
+    public String lastSearchText = "";
 
     public static @NotNull GrepApiSettings getInstance(@NotNull Project project) {
         return project.getService(GrepApiSettings.class);
@@ -37,6 +40,16 @@ public final class GrepApiSettings implements PersistentStateComponent<GrepApiSe
 
     public void setMatchHighlightPalette(@NotNull String palette) {
         matchHighlightPalette = palette;
+    }
+
+    public @NotNull String getLastSearchText() {
+        return lastSearchText == null ? "" : lastSearchText;
+    }
+
+    public void setLastSearchText(@NotNull String value) {
+        lastSearchText = value.length() <= MAX_SAVED_SEARCH_LENGTH
+                ? value
+                : value.substring(0, MAX_SAVED_SEARCH_LENGTH);
     }
 
     @Override

@@ -7,7 +7,7 @@ import org.jetbrains.annotations.NotNull;
 import java.awt.Color;
 
 public enum MatchHighlightPalette {
-    BLUE("蓝色（推荐）", 0xDCEBFF, 0x315A9B, 0x174EA6, 0xFFFFFF),
+    BLUE("天空蓝（推荐）", 0xDDF5FF, 0x38BDF8, 0x0B5E85, 0xFFFFFF),
     GREEN("绿色", 0xD9F3E5, 0x286347, 0x17613B, 0xFFFFFF),
     ORANGE("橙色", 0xFFE4B5, 0x7A5420, 0x8A4B00, 0xFFFFFF),
     PURPLE("紫色", 0xEADFFF, 0x5A4387, 0x5A2EA6, 0xFFFFFF);

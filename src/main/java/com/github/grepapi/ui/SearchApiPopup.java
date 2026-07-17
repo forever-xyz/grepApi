@@ -8,22 +8,29 @@ import com.github.grepapi.model.ApiRouteMatch;
 import com.github.grepapi.model.ApiSearchRequest;
 import com.github.grepapi.service.ApiRouteService;
 import com.github.grepapi.settings.GrepApiSettings;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.ScrollType;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
+import com.intellij.openapi.progress.EmptyProgressIndicator;
+import com.intellij.openapi.progress.ProcessCanceledException;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.popup.JBPopup;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
+import com.intellij.openapi.ui.popup.JBPopupListener;
+import com.intellij.openapi.ui.popup.LightweightWindowEvent;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
-import com.intellij.ui.ColoredListCellRenderer;
 import com.intellij.ui.DocumentAdapter;
+import com.intellij.ui.ColoredListCellRenderer;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.SearchTextField;
 import com.intellij.ui.SimpleTextAttributes;
@@ -35,28 +42,42 @@ import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.AbstractAction;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.Icon;
 import javax.swing.JComponent;
+import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
+import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
 import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class SearchApiPopup {
-    private static final int MAX_RESULTS = 500;
-    private static final int SEARCH_DELAY_MS = 80;
+    private static final int INITIAL_RESULTS = 50;
+    private static final int MAX_RESULTS = 200;
+    private static final int SEARCH_DELAY_MS = 150;
     private static final String ALL_METHODS = "全部方式";
     private static final String[] HTTP_METHOD_FILTERS = {
             ALL_METHODS, "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"
@@ -76,6 +97,8 @@ public final class SearchApiPopup {
     private final JBLabel statusLabel = new JBLabel(" ");
     private final Timer searchTimer;
     private final AtomicBoolean loading = new AtomicBoolean();
+    private final AtomicLong searchGeneration = new AtomicLong();
+    private final AtomicReference<ProgressIndicator> activeSearch = new AtomicReference<>();
 
     private volatile List<ApiRoute> routes;
     private JBPopup popup;
@@ -90,6 +113,7 @@ public final class SearchApiPopup {
 
     public void show() {
         JPanel panel = createPanel();
+        restoreLastSearch();
         popup = JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(panel, searchField.getTextEditor())
                 .setRequestFocus(true)
@@ -99,8 +123,14 @@ public final class SearchApiPopup {
                 .setCancelOnClickOutside(true)
                 .setCancelOnOtherWindowOpen(true)
                 .setCancelKeyEnabled(true)
-                .setDimensionServiceKey(project, "GrepApi.SearchPopup.v3", false)
+                .setDimensionServiceKey(project, "GrepApi.SearchPopup.v4", false)
                 .createPopup();
+        popup.addListener(new JBPopupListener() {
+            @Override
+            public void onClosed(@NotNull LightweightWindowEvent event) {
+                cancelActiveSearch();
+            }
+        });
 
         configureInteractions();
         updateResults();
@@ -111,7 +141,7 @@ public final class SearchApiPopup {
     private @NotNull JPanel createPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, JBUI.scale(6)));
         panel.setBorder(JBUI.Borders.empty(8));
-        panel.setPreferredSize(new Dimension(JBUI.scale(760), JBUI.scale(400)));
+        panel.setPreferredSize(new Dimension(JBUI.scale(640), JBUI.scale(340)));
 
         JPanel header = new JPanel(new BorderLayout(0, JBUI.scale(7)));
         JBLabel title = new JBLabel("搜索 API 接口", PLUGIN_ICON, SwingConstants.LEFT);
@@ -129,7 +159,7 @@ public final class SearchApiPopup {
                 .setText("输入 URL、路径、方法名、Controller 或模块名称");
 
         resultList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        resultList.setCellRenderer(new RouteResultRenderer(
+        resultList.setCellRenderer(new RoundedRouteResultRenderer(
                 MatchHighlightPalette.fromId(
                         GrepApiSettings.getInstance(project).getMatchHighlightPalette()
                 )
@@ -150,6 +180,8 @@ public final class SearchApiPopup {
         searchField.getTextEditor().getDocument().addDocumentListener(new DocumentAdapter() {
             @Override
             protected void textChanged(@NotNull DocumentEvent event) {
+                GrepApiSettings.getInstance(project).setLastSearchText(searchField.getText());
+                searchGeneration.incrementAndGet();
                 searchTimer.restart();
             }
         });
@@ -181,11 +213,21 @@ public final class SearchApiPopup {
         resultList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent event) {
-                if (event.getClickCount() == 2) {
+                int index = resultList.locationToIndex(event.getPoint());
+                if (index >= 0
+                        && SwingUtilities.isLeftMouseButton(event)
+                        && resultList.getCellBounds(index, index).contains(event.getPoint())) {
+                    resultList.setSelectedIndex(index);
                     openSelectedRoute();
                 }
             }
         });
+    }
+
+    private void restoreLastSearch() {
+        String lastSearch = GrepApiSettings.getInstance(project).getLastSearchText();
+        searchField.setText(lastSearch);
+        searchField.getTextEditor().setCaretPosition(lastSearch.length());
     }
 
     private void moveSelection(int direction) {
@@ -199,34 +241,67 @@ public final class SearchApiPopup {
     }
 
     private void updateResults() {
+        cancelActiveSearch();
+        long generation = searchGeneration.incrementAndGet();
         String input = searchField.getText();
         ApiSearchRequest request = UrlInputParser.parse(
                 input,
                 GrepApiSettings.getInstance(project).getIgnoredPrefixes()
         );
         request = applyMethodFilter(request);
+        List<ApiRoute> routeSnapshot = routes;
 
-        ApiMatchResult result;
         if (request == null) {
-            result = firstRoutes(routes, MAX_RESULTS);
-        } else {
-            result = matcher.search(request, routes, MAX_RESULTS);
+            applyResults(
+                    generation,
+                    firstRoutes(routeSnapshot, INITIAL_RESULTS),
+                    routeSnapshot.size(),
+                    INITIAL_RESULTS
+            );
+            return;
         }
 
+        statusLabel.setText("正在搜索…");
+        ApiSearchRequest searchRequest = request;
+        ProgressIndicator indicator = new EmptyProgressIndicator();
+        activeSearch.set(indicator);
+        AppExecutorUtil.getAppExecutorService().execute(() -> {
+            try {
+                ApiMatchResult result = ProgressManager.getInstance().runProcess(
+                        () -> matcher.search(searchRequest, routeSnapshot, MAX_RESULTS),
+                        indicator
+                );
+                ApplicationManager.getApplication().invokeLater(
+                        () -> applyResults(generation, result, routeSnapshot.size(), MAX_RESULTS),
+                        ModalityState.any()
+                );
+            } catch (ProcessCanceledException ignored) {
+                // A newer query or a closed popup has superseded this result.
+            } finally {
+                activeSearch.compareAndSet(indicator, null);
+            }
+        });
+    }
+
+    private void cancelActiveSearch() {
+        ProgressIndicator previous = activeSearch.getAndSet(null);
+        if (previous != null) {
+            previous.cancel();
+        }
+    }
+
+    private void applyResults(long generation, @NotNull ApiMatchResult result, int routeCount, int limit) {
+        if (generation != searchGeneration.get() || popup == null || popup.isDisposed()) {
+            return;
+        }
         listModel.clear();
-        for (ApiRouteMatch match : result.matches()) {
-            listModel.addElement(match);
-        }
-        if (!listModel.isEmpty()) {
-            resultList.setSelectedIndex(0);
-        }
-
-        if (loading.get() && routes.isEmpty()) {
+        listModel.addAll(result.matches());
+        if (loading.get() && routeCount == 0) {
             statusLabel.setText("正在后台加载接口索引…");
         } else {
             statusLabel.setText(
-                    "找到 " + result.totalMatches() + " 个结果，已索引 " + routes.size()
-                            + " 个接口（最多显示 " + MAX_RESULTS + " 条）"
+                    "找到 " + result.totalMatches() + " 个结果，已索引 " + routeCount
+                            + " 个接口（最多显示 " + limit + " 条）"
             );
         }
     }
@@ -274,12 +349,13 @@ public final class SearchApiPopup {
         }
 
         ReadAction.nonBlocking(routeService::getRoutes)
-                .coalesceBy(project, ApiRouteService.class)
+                .coalesceBy(project, SearchApiPopup.class)
                 .expireWith(project)
                 .expireWhen(() -> popup == null || popup.isDisposed())
                 .finishOnUiThread(ModalityState.any(), refreshedRoutes -> {
                     routes = refreshedRoutes;
                     loading.set(false);
+                    matcher.clearCache();
                     updateResults();
                 })
                 .submit(AppExecutorUtil.getAppExecutorService());
@@ -379,6 +455,210 @@ public final class SearchApiPopup {
                 matchIndex = lowerPath.indexOf(lowerQuery, cursor);
             }
             append(path.substring(cursor), SimpleTextAttributes.REGULAR_ATTRIBUTES);
+        }
+    }
+
+    /** Compact renderer that keeps the matched URL in a visually distinct rounded chip. */
+    private static final class RoundedRouteResultRenderer extends JPanel
+            implements ListCellRenderer<ApiRouteMatch> {
+        private final JLabel methodLabel = new JLabel();
+        private final RoundedPathLabel pathLabel;
+        private final JLabel targetLabel = new JLabel();
+        private final JLabel moduleLabel = new JLabel();
+        private final JLabel reasonLabel = new JLabel();
+
+        private RoundedRouteResultRenderer(@NotNull MatchHighlightPalette palette) {
+            setLayout(new BoxLayout(this, BoxLayout.X_AXIS));
+            setBorder(JBUI.Borders.empty(4, 6));
+
+            methodLabel.setFont(methodLabel.getFont().deriveFont(Font.BOLD));
+            pathLabel = new RoundedPathLabel(palette);
+            add(methodLabel);
+            add(Box.createHorizontalStrut(JBUI.scale(6)));
+            add(pathLabel);
+            add(Box.createHorizontalStrut(JBUI.scale(10)));
+            add(targetLabel);
+            add(Box.createHorizontalStrut(JBUI.scale(8)));
+            add(moduleLabel);
+            add(Box.createHorizontalStrut(JBUI.scale(8)));
+            add(reasonLabel);
+        }
+
+        @Override
+        public JComponent getListCellRendererComponent(
+                JList<? extends ApiRouteMatch> list,
+                ApiRouteMatch value,
+                int index,
+                boolean selected,
+                boolean hasFocus
+        ) {
+            ApiRoute route = value.route();
+            Color foreground = selected ? list.getSelectionForeground() : list.getForeground();
+            Color secondary = selected ? foreground : JBColor.GRAY;
+
+            setBackground(selected ? list.getSelectionBackground() : list.getBackground());
+            methodLabel.setIcon(HttpMethodIcons.forRoute(route));
+            methodLabel.setIconTextGap(JBUI.scale(5));
+            methodLabel.setText(route.displayHttpMethods());
+            methodLabel.setForeground(foreground);
+            pathLabel.configure(route.path(), value.matchedInputPath(), selected, foreground);
+            targetLabel.setText("Java: " + route.simpleClassName() + "#" + route.methodName());
+            targetLabel.setForeground(secondary);
+            moduleLabel.setText("\u6A21\u5757: " + route.moduleName());
+            moduleLabel.setForeground(secondary);
+            reasonLabel.setText(value.reason());
+            reasonLabel.setForeground(secondary);
+            setToolTipText(route.className() + "#" + route.methodName());
+            return this;
+        }
+    }
+
+    /** Draws URL text with a rounded background and a bold foreground for matched fragments. */
+    private static final class RoundedPathLabel extends JComponent {
+        private final MatchHighlightPalette palette;
+        private String path = "";
+        private String query = "";
+        private boolean selected;
+        private Color regularForeground = JBColor.foreground();
+
+        private RoundedPathLabel(@NotNull MatchHighlightPalette palette) {
+            this.palette = palette;
+            setOpaque(false);
+            setFont(displayFont().deriveFont(Font.BOLD));
+        }
+
+        private void configure(
+                @NotNull String path,
+                @NotNull String query,
+                boolean selected,
+                @NotNull Color regularForeground
+        ) {
+            this.path = path;
+            this.query = normalizeQuery(query);
+            this.selected = selected;
+            this.regularForeground = regularForeground;
+            revalidate();
+            repaint();
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            int horizontalPadding = JBUI.scale(8);
+            Font font = displayFont();
+            int height = Math.max(JBUI.scale(24), getFontMetrics(font).getHeight() + JBUI.scale(8));
+            return new Dimension(getFontMetrics(font).stringWidth(path) + horizontalPadding * 2, height);
+        }
+
+        @Override
+        protected void paintComponent(Graphics graphics) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                int height = getHeight();
+                int horizontalPadding = JBUI.scale(8);
+                Font regularFont = displayFont();
+                Font matchFont = regularFont.deriveFont(Font.BOLD);
+                int baseline = (height - getFontMetrics(regularFont).getHeight()) / 2
+                        + getFontMetrics(regularFont).getAscent();
+                drawHighlightedPath(g, horizontalPadding, baseline, height, regularFont, matchFont);
+            } finally {
+                g.dispose();
+            }
+        }
+
+        private void drawHighlightedPath(
+                @NotNull Graphics2D g,
+                int x,
+                int baseline,
+                int height,
+                @NotNull Font regularFont,
+                @NotNull Font matchFont
+        ) {
+            if (query.isEmpty()) {
+                g.setFont(regularFont);
+                g.setColor(regularForeground);
+                g.drawString(path, x, baseline);
+                return;
+            }
+
+            String lowerPath = path.toLowerCase(java.util.Locale.ROOT);
+            String lowerQuery = query.toLowerCase(java.util.Locale.ROOT);
+            int cursor = 0;
+            int matchIndex = lowerPath.indexOf(lowerQuery);
+            while (matchIndex >= 0) {
+                x = drawText(g, path.substring(cursor, matchIndex), x, baseline, regularFont, regularForeground);
+                Color matchColor = selected ? regularForeground : palette.foreground();
+                x = drawMatchedText(
+                        g,
+                        path.substring(matchIndex, matchIndex + query.length()),
+                        x,
+                        baseline,
+                        height,
+                        matchFont,
+                        matchColor
+                );
+                cursor = matchIndex + query.length();
+                matchIndex = lowerPath.indexOf(lowerQuery, cursor);
+            }
+            drawText(g, path.substring(cursor), x, baseline, regularFont, regularForeground);
+        }
+
+        private static int drawText(
+                @NotNull Graphics2D g,
+                @NotNull String text,
+                int x,
+                int baseline,
+                @NotNull Font font,
+                @NotNull Color color
+        ) {
+            g.setFont(font);
+            g.setColor(color);
+            g.drawString(text, x, baseline);
+            return x + g.getFontMetrics(font).stringWidth(text);
+        }
+
+        private int drawMatchedText(
+                @NotNull Graphics2D g,
+                @NotNull String text,
+                int x,
+                int baseline,
+                int height,
+                @NotNull Font font,
+                @NotNull Color color
+        ) {
+            int textWidth = g.getFontMetrics(font).stringWidth(text);
+            int padding = JBUI.scale(3);
+            Color background = palette.background();
+            g.setColor(new Color(
+                    background.getRed(),
+                    background.getGreen(),
+                    background.getBlue(),
+                    selected ? 120 : 92
+            ));
+            g.fillRoundRect(
+                    x - padding,
+                    JBUI.scale(2),
+                    textWidth + padding * 2,
+                    Math.max(0, height - JBUI.scale(4)),
+                    JBUI.scale(8),
+                    JBUI.scale(8)
+            );
+            return drawText(g, text, x, baseline, font, color);
+        }
+
+        private static @NotNull String normalizeQuery(@NotNull String query) {
+            String normalized = query.trim();
+            int methodSeparator = normalized.indexOf(' ');
+            return methodSeparator > 0 ? normalized.substring(methodSeparator + 1).trim() : normalized;
+        }
+
+        private @NotNull Font displayFont() {
+            Font font = getFont();
+            if (font != null) {
+                return font;
+            }
+            Font labelFont = UIManager.getFont("Label.font");
+            return labelFont != null ? labelFont : new Font(Font.SANS_SERIF, Font.PLAIN, 12);
         }
     }
 

@@ -1,10 +1,13 @@
+import com.sun.org.apache.bcel.internal.util.Args.require
+import com.sun.tools.attach.spi.AttachProvider.providers
+
 plugins {
     id("java")
     id("org.jetbrains.intellij.platform") version "2.18.1"
 }
 
 group = "io.github.found404.grepapi"
-version = "0.0.1"
+version = "0.0.2"
 
 repositories {
     mavenCentral()
@@ -16,13 +19,14 @@ repositories {
 dependencies {
     intellijPlatform {
         val localIdePath = providers.gradleProperty("localIdePath").orNull
-        if (localIdePath.isNullOrBlank()) {
-            intellijIdeaCommunity("2024.1.7") {
-                useInstaller = false
-            }
-        } else {
-            local(localIdePath)
+        require(!localIdePath.isNullOrBlank()) {
+            """
+            Missing localIdePath. Set it in C:/Users/Administrator/.gradle/gradle.properties, for example:
+            localIdePath=D:\tools\IntelliJ IDEA 2026.1.1
+            This project intentionally uses a local IntelliJ IDEA SDK and never downloads a target IDE SDK.
+            """.trimIndent()
         }
+        local(localIdePath)
         bundledPlugin("com.intellij.java")
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Plugin.Java)
@@ -37,15 +41,17 @@ dependencies {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        // IntelliJ IDEA 2026 ships Java 21 class files. Build with JDK 21 so
+        // the compiler can read that SDK, while JavaCompile below keeps the
+        // plugin bytecode compatible with IDEA 2024's Java 17 runtime.
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
 tasks {
     withType<JavaCompile>().configureEach {
         options.encoding = "UTF-8"
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
+        options.release.set(17)
     }
 
     test {
