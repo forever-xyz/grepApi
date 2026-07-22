@@ -11,9 +11,11 @@ import com.github.grepapi.settings.GrepApiSettings;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.ScrollType;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.progress.EmptyProgressIndicator;
 import com.intellij.openapi.progress.ProcessCanceledException;
@@ -21,6 +23,7 @@ import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.popup.JBPopup;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
@@ -29,6 +32,7 @@ import com.intellij.openapi.ui.popup.LightweightWindowEvent;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiDocumentManager;
 import com.intellij.ui.DocumentAdapter;
 import com.intellij.ui.ColoredListCellRenderer;
 import com.intellij.ui.JBColor;
@@ -70,13 +74,15 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class SearchApiPopup {
     private static final int INITIAL_RESULTS = 50;
-    private static final int MAX_RESULTS = 200;
+    private static final int MAX_RESULTS = 50;
     private static final int SEARCH_DELAY_MS = 150;
     private static final String ALL_METHODS = "全部方式";
     private static final String[] HTTP_METHOD_FILTERS = {
@@ -112,8 +118,10 @@ public final class SearchApiPopup {
     }
 
     public void show() {
+        // Include newly typed controller methods without forcing the user to save files.
+        commitPendingSourceDocuments();
         JPanel panel = createPanel();
-        restoreLastSearch();
+        showRecentRoutes();
         popup = JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(panel, searchField.getTextEditor())
                 .setRequestFocus(true)
@@ -224,10 +232,27 @@ public final class SearchApiPopup {
         });
     }
 
-    private void restoreLastSearch() {
-        String lastSearch = GrepApiSettings.getInstance(project).getLastSearchText();
-        searchField.setText(lastSearch);
-        searchField.getTextEditor().setCaretPosition(lastSearch.length());
+    private void showRecentRoutes() {
+        searchField.setText("");
+        searchField.getTextEditor().setCaretPosition(0);
+    }
+
+    /** Commits only changed project Java files, never every open editor document. */
+    private void commitPendingSourceDocuments() {
+        PsiDocumentManager documentManager = PsiDocumentManager.getInstance(project);
+        if (!documentManager.hasUncommittedDocuments()) {
+            return;
+        }
+        ProjectFileIndex fileIndex = ProjectFileIndex.getInstance(project);
+        for (Document document : documentManager.getUncommittedDocuments()) {
+            VirtualFile file = FileDocumentManager.getInstance().getFile(document);
+            if (file != null
+                    && "java".equalsIgnoreCase(file.getExtension())
+                    && fileIndex.isInSourceContent(file)
+                    && !fileIndex.isInTestSourceContent(file)) {
+                documentManager.commitDocument(document);
+            }
+        }
     }
 
     private void moveSelection(int direction) {
@@ -241,6 +266,9 @@ public final class SearchApiPopup {
     }
 
     private void updateResults() {
+        if (!routeService.isUpToDate()) {
+            loadRoutesInBackground();
+        }
         cancelActiveSearch();
         long generation = searchGeneration.incrementAndGet();
         String input = searchField.getText();
@@ -254,9 +282,11 @@ public final class SearchApiPopup {
         if (request == null) {
             applyResults(
                     generation,
-                    firstRoutes(routeSnapshot, INITIAL_RESULTS),
+                    recentRoutes(routeSnapshot),
                     routeSnapshot.size(),
-                    INITIAL_RESULTS
+                    GrepApiSettings.getInstance(project).getRecentRouteKeys().isEmpty()
+                            ? INITIAL_RESULTS
+                            : GrepApiSettings.getInstance(project).getRecentRouteKeys().size()
             );
             return;
         }
@@ -333,6 +363,26 @@ public final class SearchApiPopup {
         return new ApiMatchResult(List.copyOf(matches), source.size());
     }
 
+    private @NotNull ApiMatchResult recentRoutes(@NotNull List<ApiRoute> source) {
+        List<String> recentKeys = GrepApiSettings.getInstance(project).getRecentRouteKeys();
+        if (recentKeys.isEmpty()) {
+            return firstRoutes(source, INITIAL_RESULTS);
+        }
+
+        Map<String, ApiRoute> routesByKey = new HashMap<>();
+        for (ApiRoute route : source) {
+            routesByKey.put(routeKey(route), route);
+        }
+        java.util.ArrayList<ApiRouteMatch> matches = new java.util.ArrayList<>(recentKeys.size());
+        for (String key : recentKeys) {
+            ApiRoute route = routesByKey.get(key);
+            if (route != null) {
+                matches.add(new ApiRouteMatch(route, 0, "", 0, "最近打开"));
+            }
+        }
+        return new ApiMatchResult(List.copyOf(matches), matches.size());
+    }
+
     private void loadRoutesInBackground() {
         if (popup == null || popup.isDisposed() || !loading.compareAndSet(false, true)) {
             return;
@@ -366,6 +416,7 @@ public final class SearchApiPopup {
         if (selected == null) {
             return;
         }
+        GrepApiSettings.getInstance(project).recordRecentRoute(routeKey(selected.route()));
         navigate(selected.route());
         if (popup != null) {
             popup.cancel();
@@ -458,30 +509,33 @@ public final class SearchApiPopup {
         }
     }
 
+    private static @NotNull String routeKey(@NotNull ApiRoute route) {
+        return route.displayHttpMethods() + "|" + route.path() + "|"
+                + route.className() + "#" + route.methodName();
+    }
+
     /** Compact renderer that keeps the matched URL in a visually distinct rounded chip. */
     private static final class RoundedRouteResultRenderer extends JPanel
             implements ListCellRenderer<ApiRouteMatch> {
         private final JLabel methodLabel = new JLabel();
         private final RoundedPathLabel pathLabel;
         private final JLabel targetLabel = new JLabel();
-        private final JLabel moduleLabel = new JLabel();
-        private final JLabel reasonLabel = new JLabel();
+        private final JPanel routePanel = new JPanel();
 
         private RoundedRouteResultRenderer(@NotNull MatchHighlightPalette palette) {
-            setLayout(new BoxLayout(this, BoxLayout.X_AXIS));
+            setLayout(new BorderLayout(JBUI.scale(10), 0));
             setBorder(JBUI.Borders.empty(4, 6));
 
             methodLabel.setFont(methodLabel.getFont().deriveFont(Font.BOLD));
             pathLabel = new RoundedPathLabel(palette);
-            add(methodLabel);
-            add(Box.createHorizontalStrut(JBUI.scale(6)));
-            add(pathLabel);
-            add(Box.createHorizontalStrut(JBUI.scale(10)));
-            add(targetLabel);
-            add(Box.createHorizontalStrut(JBUI.scale(8)));
-            add(moduleLabel);
-            add(Box.createHorizontalStrut(JBUI.scale(8)));
-            add(reasonLabel);
+            routePanel.setOpaque(false);
+            routePanel.setLayout(new BoxLayout(routePanel, BoxLayout.X_AXIS));
+            routePanel.add(methodLabel);
+            routePanel.add(Box.createHorizontalStrut(JBUI.scale(8)));
+            routePanel.add(pathLabel);
+            targetLabel.setPreferredSize(new Dimension(JBUI.scale(190), 0));
+            add(routePanel, BorderLayout.CENTER);
+            add(targetLabel, BorderLayout.EAST);
         }
 
         @Override
@@ -504,11 +558,7 @@ public final class SearchApiPopup {
             pathLabel.configure(route.path(), value.matchedInputPath(), selected, foreground);
             targetLabel.setText("Java: " + route.simpleClassName() + "#" + route.methodName());
             targetLabel.setForeground(secondary);
-            moduleLabel.setText("\u6A21\u5757: " + route.moduleName());
-            moduleLabel.setForeground(secondary);
-            reasonLabel.setText(value.reason());
-            reasonLabel.setForeground(secondary);
-            setToolTipText(route.className() + "#" + route.methodName());
+            setToolTipText(route.path() + "\n" + route.className() + "#" + route.methodName());
             return this;
         }
     }
