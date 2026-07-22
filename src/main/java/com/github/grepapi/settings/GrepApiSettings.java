@@ -17,7 +17,7 @@ import java.util.List;
 @State(name = "GrepApiSettings", storages = @Storage(StoragePathMacros.WORKSPACE_FILE))
 public final class GrepApiSettings implements PersistentStateComponent<GrepApiSettings> {
     private static final int MAX_SAVED_SEARCH_LENGTH = 2_048;
-    private static final int MAX_RECENT_ROUTES = 15;
+    public static final int MAX_RECENT_ROUTES = 10;
 
     public List<String> ignoredPrefixes = new ArrayList<>();
     public String matchHighlightPalette = "BLUE";
@@ -55,10 +55,17 @@ public final class GrepApiSettings implements PersistentStateComponent<GrepApiSe
     }
 
     public @NotNull List<String> getRecentRouteKeys() {
-        return List.copyOf(recentRouteKeys);
+        if (recentRouteKeys == null || recentRouteKeys.isEmpty()) {
+            return List.of();
+        }
+        int size = Math.min(recentRouteKeys.size(), MAX_RECENT_ROUTES);
+        return List.copyOf(recentRouteKeys.subList(0, size));
     }
 
     public void recordRecentRoute(@NotNull String routeKey) {
+        if (recentRouteKeys == null) {
+            recentRouteKeys = new ArrayList<>();
+        }
         recentRouteKeys.remove(routeKey);
         recentRouteKeys.add(0, routeKey);
         if (recentRouteKeys.size() > MAX_RECENT_ROUTES) {
