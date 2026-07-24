@@ -44,4 +44,19 @@ class UrlInputParserTest {
         assertEquals("tradeShip", request.searchText());
         assertEquals(List.of(), request.candidatePaths());
     }
+
+    @Test
+    void parsesRelativePathFromItsFirstSegment() {
+        ApiSearchRequest request = UrlInputParser.parse(
+                "trainResourcePool/queryByWholePlanNo",
+                List.of()
+        );
+
+        assertNotNull(request);
+        assertEquals("/trainResourcePool/queryByWholePlanNo", request.path());
+        assertEquals(
+                List.of("/trainResourcePool/queryByWholePlanNo"),
+                request.candidatePaths()
+        );
+    }
 }

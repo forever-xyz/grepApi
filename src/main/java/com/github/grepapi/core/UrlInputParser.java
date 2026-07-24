@@ -17,6 +17,7 @@ public final class UrlInputParser {
             "(?i)(?:^|\\s|(?:-X\\s+))(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)(?=\\s|$)"
     );
     private static final Pattern FULL_URL = Pattern.compile("https?://[^\\s\\\"']+");
+    private static final Pattern RELATIVE_PATH = Pattern.compile("^[^\\s\\\"'/][^\\s\\\"']*/[^\\s\\\"']*$");
     private static final Pattern PATH = Pattern.compile("/[^\\s\\\"']*");
 
     private UrlInputParser() {
@@ -80,6 +81,11 @@ public final class UrlInputParser {
                 int slash = scheme < 0 ? -1 : url.indexOf('/', scheme + 3);
                 return slash < 0 ? "/" : url.substring(slash);
             }
+        }
+
+        String textWithoutMethod = removeLeadingHttpMethod(text).trim();
+        if (RELATIVE_PATH.matcher(textWithoutMethod).matches()) {
+            return trimTrailingPunctuation(textWithoutMethod);
         }
 
         Matcher pathMatcher = PATH.matcher(text);
