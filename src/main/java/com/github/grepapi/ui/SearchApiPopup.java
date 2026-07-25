@@ -81,10 +81,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class SearchApiPopup {
-    private static final int INITIAL_RESULTS = 50;
     private static final int MAX_RESULTS = 50;
     private static final int SEARCH_DELAY_MS = 150;
-    private static final String ALL_METHODS = "全部方式";
+    private static final String ALL_METHODS = "全部";
     private static final String[] HTTP_METHOD_FILTERS = {
             ALL_METHODS, "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"
     };
@@ -121,7 +120,7 @@ public final class SearchApiPopup {
         // Include newly typed controller methods without forcing the user to save files.
         commitPendingSourceDocuments();
         JPanel panel = createPanel();
-        showRecentRoutes();
+        restoreLastSearch();
         popup = JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(panel, searchField.getTextEditor())
                 .setRequestFocus(true)
@@ -143,6 +142,7 @@ public final class SearchApiPopup {
         configureInteractions();
         updateResults();
         popup.showCenteredInCurrentWindow(project);
+        searchField.getTextEditor().selectAll();
         loadRoutesInBackground();
     }
 
@@ -156,7 +156,7 @@ public final class SearchApiPopup {
         title.setFont(title.getFont().deriveFont(java.awt.Font.BOLD));
 
         JPanel searchRow = new JPanel(new BorderLayout(JBUI.scale(6), 0));
-        methodFilter.setPreferredSize(new Dimension(JBUI.scale(104), JBUI.scale(32)));
+        methodFilter.setPreferredSize(new Dimension(JBUI.scale(88), JBUI.scale(30)));
         methodFilter.setToolTipText("按 HTTP 请求方式筛选");
         searchRow.add(searchField, BorderLayout.CENTER);
         searchRow.add(methodFilter, BorderLayout.EAST);
@@ -232,15 +232,16 @@ public final class SearchApiPopup {
         });
     }
 
-    private void showRecentRoutes() {
-        searchField.setText("");
-        searchField.getTextEditor().setCaretPosition(0);
+    private void restoreLastSearch() {
+        String lastSearch = GrepApiSettings.getInstance(project).getLastSearchText();
+        searchField.setText(lastSearch);
+        searchField.getTextEditor().selectAll();
     }
 
     /** Commits only changed project Java files, never every open editor document. */
     private void commitPendingSourceDocuments() {
         PsiDocumentManager documentManager = PsiDocumentManager.getInstance(project);
-        if (!documentManager.hasUncommittedDocuments()) {
+        if (!documentManager.hasUncommitedDocuments()) {
             return;
         }
         ProjectFileIndex fileIndex = ProjectFileIndex.getInstance(project);
@@ -284,9 +285,7 @@ public final class SearchApiPopup {
                     generation,
                     recentRoutes(routeSnapshot),
                     routeSnapshot.size(),
-                    GrepApiSettings.getInstance(project).getRecentRouteKeys().isEmpty()
-                            ? INITIAL_RESULTS
-                            : GrepApiSettings.getInstance(project).getRecentRouteKeys().size()
+                    GrepApiSettings.MAX_RECENT_ROUTES
             );
             return;
         }
@@ -326,6 +325,10 @@ public final class SearchApiPopup {
         }
         listModel.clear();
         listModel.addAll(result.matches());
+        if (!listModel.isEmpty()) {
+            resultList.setSelectedIndex(0);
+            resultList.ensureIndexIsVisible(0);
+        }
         if (loading.get() && routeCount == 0) {
             statusLabel.setText("正在后台加载接口索引…");
         } else {
@@ -353,20 +356,10 @@ public final class SearchApiPopup {
         );
     }
 
-    private @NotNull ApiMatchResult firstRoutes(@NotNull List<ApiRoute> source, int limit) {
-        int size = Math.min(source.size(), limit);
-        java.util.ArrayList<ApiRouteMatch> matches = new java.util.ArrayList<>(size);
-        for (int index = 0; index < size; index++) {
-            ApiRoute route = source.get(index);
-            matches.add(new ApiRouteMatch(route, 0, "", 0, "全部接口"));
-        }
-        return new ApiMatchResult(List.copyOf(matches), source.size());
-    }
-
     private @NotNull ApiMatchResult recentRoutes(@NotNull List<ApiRoute> source) {
         List<String> recentKeys = GrepApiSettings.getInstance(project).getRecentRouteKeys();
         if (recentKeys.isEmpty()) {
-            return firstRoutes(source, INITIAL_RESULTS);
+            return new ApiMatchResult(List.of(), 0);
         }
 
         Map<String, ApiRoute> routesByKey = new HashMap<>();

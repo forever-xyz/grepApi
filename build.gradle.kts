@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "io.github.found404.grepapi"
-version = "0.0.2"
+version = "0.0.4"
 
 repositories {
     mavenCentral()
@@ -81,11 +81,10 @@ intellijPlatform {
 
         changeNotes = """
             <ul>
-                <li>Initial public release.</li>
-                <li>Fast Spring MVC endpoint search with fuzzy matching and HTTP method filters.</li>
-                <li>Open search with <code>Ctrl + Alt + /</code> on Windows/Linux or <code>Command + Option + /</code> on macOS.</li>
-                <li>Jump directly from a search result to the matching Controller method.</li>
-                <li>Supports IntelliJ IDEA 2024.1 and later.</li>
+                <li>Automatically selects the highest-ranked search result so pressing <code>Enter</code> opens it immediately.</li>
+                <li>Restores the previous search text and selects it for quick paste replacement.</li>
+                <li>Shows up to ten recently opened endpoints when the search field is empty, ordered newest first.</li>
+                <li>Uses a more compact HTTP method filter and improves search popup interactions.</li>
             </ul>
         """.trimIndent()
     }
