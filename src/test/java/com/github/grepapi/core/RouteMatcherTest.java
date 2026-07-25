@@ -49,6 +49,25 @@ class RouteMatcherTest {
     }
 
     @Test
+    void highlightsTheCompleteRelativePathMatch() {
+        ApiRoute route = route(
+                Set.of("GET"),
+                "/web/trainResourcePool/queryByWholePlanNo"
+        );
+        ApiSearchRequest request = UrlInputParser.parse(
+                "trainResourcePool/queryByWholePlanNo",
+                List.of()
+        );
+
+        ApiRouteMatch match = matcher.match(request, List.of(route)).get(0);
+
+        assertEquals(
+                "/trainResourcePool/queryByWholePlanNo",
+                match.matchedInputPath()
+        );
+    }
+
+    @Test
     void supportsNonContiguousFuzzyCharacters() {
         ApiRoute route = route(Set.of("GET"), "/task/getNextNodeList", "getNextNodeList");
         ApiSearchRequest request = UrlInputParser.parse("gtnnl", List.of());
